@@ -10,17 +10,22 @@ import os
 
 load_dotenv()
 
-_supabase: Client = create_client(
-    os.getenv("SUPABASE_URL", ""),
-    os.getenv("SUPABASE_ANON_KEY", ""),
-)
+_supabase: Client | None = None
+
+def _get_supabase() -> Client:
+    global _supabase
+    if _supabase is None:
+        url = os.getenv("SUPABASE_URL", "")
+        key = os.getenv("SUPABASE_ANON_KEY", "")
+        _supabase = create_client(url, key)
+    return _supabase
 
 
 def cargar_conocimiento() -> str:
     """Carga todos los registros activos de la tabla conocimiento."""
     try:
         result = (
-            _supabase.table("conocimiento")
+            _get_supabase().table("conocimiento")
             .select("titulo, contenido")
             .eq("activo", True)
             .order("categoria")
