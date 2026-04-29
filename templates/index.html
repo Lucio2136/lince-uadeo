@@ -685,6 +685,18 @@
 
 
 <script>
+// ─── DESBLOQUEO DE AUDIO (Chrome autoplay policy) ────────────
+(function() {
+  const unlock = () => {
+    const a = new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA");
+    a.play().catch(()=>{});
+    document.removeEventListener("click",    unlock);
+    document.removeEventListener("touchstart", unlock);
+  };
+  document.addEventListener("click",     unlock);
+  document.addEventListener("touchstart", unlock);
+})();
+
 // ─── ESTADO ─────────────────────────────────────────────────
 let procesando      = false;
 let escuchando      = false;
@@ -1241,7 +1253,12 @@ async function reproducirConTypewriter(texto, spanEl, burbujaEl) {
       }
     }, msPerChar);
 
-    audioActual.play();
+    audioActual.play().catch(() => {
+      // Chrome bloqueó el audio — mostrar texto sin voz
+      spanEl.textContent = texto;
+      _limpiarSpeaking();
+      setStatusChat("");
+    });
     // ────────────────────────────────────────────────────────
 
     audioActual.onended = () => {
