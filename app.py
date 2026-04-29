@@ -1,7 +1,8 @@
 """
-LINCE v5 — Stack: FastAPI + urllib (nativo Python) + Supabase
+LINCE v6 — Stack: FastAPI + urllib (nativo Python) + Supabase
 Sin dependencia del SDK de OpenAI — usa urllib directamente.
 """
+from __future__ import annotations
 
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
@@ -169,7 +170,7 @@ async def index(request: Request):
 
 @app.get("/health")
 async def health():
-    return {"version": "v5", "ok": True}
+    return {"version": "v6", "ok": True}
 
 
 @app.post("/chat")
