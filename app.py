@@ -1,6 +1,6 @@
 """
-LINCE v6 — Stack: FastAPI + urllib (nativo Python) + Supabase
-Sin dependencia del SDK de OpenAI — usa urllib directamente.
+LINCE — Servidor web del asistente virtual UAdeO.
+Stack: FastAPI + OpenAI + Supabase
 """
 from __future__ import annotations
 
@@ -8,14 +8,12 @@ from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from openai import OpenAI
 from supabase import create_client, Client
 import asyncio
 import uuid
 import io
 import os
-import json
-import urllib.request
-import urllib.error
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -40,6 +38,17 @@ def get_supabase() -> Client:
         )
     return _supabase_client
 
+_openai_client: OpenAI | None = None
+
+def get_openai() -> OpenAI:
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = OpenAI(
+            api_key=os.getenv("OPENAI_API_KEY") or OPENAI_API_KEY,
+            timeout=25.0,
+        )
+    return _openai_client
+
 _system_prompt_cache: str | None = None
 
 def get_cached_prompt() -> str:
@@ -47,9 +56,6 @@ def get_cached_prompt() -> str:
     if _system_prompt_cache is None:
         _system_prompt_cache = get_system_prompt()
     return _system_prompt_cache
-
-def _api_key() -> str:
-    return os.getenv("OPENAI_API_KEY") or OPENAI_API_KEY
 
 def _guardar_mensajes(session_id: str, pregunta: str, respuesta: str):
     get_supabase().table("conversaciones").insert([
@@ -68,99 +74,38 @@ def _obtener_historial(session_id: str) -> list:
     )
     return list(reversed([{"role": r["role"], "content": r["content"]} for r in result.data]))
 
-# ── OpenAI con urllib nativo (sin SDK, sin httpx) ─────────────────────────────
-
-def _openai_post(endpoint: str, payload: dict, timeout: int = 25) -> dict:
-    body = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        f"https://api.openai.com/v1/{endpoint}",
-        data=body,
-        headers={
-            "Authorization": f"Bearer {_api_key()}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        body_err = e.read().decode(errors="replace")
-        raise RuntimeError(f"OpenAI HTTP {e.code}: {body_err}")
-    except Exception as e:
-        raise RuntimeError(f"OpenAI error: {type(e).__name__}: {e}")
-
 def _chat_sync(messages: list) -> str:
-    result = _openai_post("chat/completions", {
-        "model": OPENAI_MODEL,
-        "messages": messages,
-        "temperature": 0.7,
-        "max_tokens": 400,
-    })
-    return result["choices"][0]["message"]["content"] or ""
+    response = get_openai().chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=messages,
+        temperature=0.7,
+        max_tokens=400,
+    )
+    return response.choices[0].message.content or ""
 
 def _tts_sync(texto: str) -> bytes:
-    body = json.dumps({
-        "model": "tts-1",
-        "voice": "ash",
-        "input": texto,
-        "response_format": "mp3",
-        "speed": 1.2,
-    }).encode()
-    req = urllib.request.Request(
-        "https://api.openai.com/v1/audio/speech",
-        data=body,
-        headers={
-            "Authorization": f"Bearer {_api_key()}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
+    response = get_openai().audio.speech.create(
+        model="tts-1",
+        voice="ash",
+        input=texto,
+        response_format="mp3",
+        speed=1.2,
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.read()
+    return response.read()
 
 def _stt_sync(nombre: str, contenido: bytes) -> str:
-    import email.mime.multipart
-    import email.mime.base
-    # Multipart manual para Whisper
-    boundary = "----LinceBoundary7MA4YWxkTrZu0gW"
-    prompt_text = (
-        "Estudiante de la UAdeO Culiacán Sinaloa hablando con acento sinaloense. "
-        "Vocabulario: kardex, credencial, beca, servicio social, servicios escolares, "
-        "biblioteca, carrera, coordinador, titulación, trámite, matrícula, semestre, UAdeO."
+    archivo = io.BytesIO(contenido)
+    transcript = get_openai().audio.transcriptions.create(
+        model="whisper-1",
+        file=(nombre, archivo, "audio/webm"),
+        language="es",
+        prompt=(
+            "Estudiante de la UAdeO Culiacán Sinaloa hablando con acento sinaloense. "
+            "Vocabulario: kardex, credencial, beca, servicio social, servicios escolares, "
+            "biblioteca, carrera, coordinador, titulación, trámite, matrícula, semestre, UAdeO."
+        ),
     )
-    def field(name: str, value: str) -> bytes:
-        return (
-            f"--{boundary}\r\n"
-            f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
-            f"{value}\r\n"
-        ).encode()
-
-    body = (
-        field("model", "whisper-1") +
-        field("language", "es") +
-        field("prompt", prompt_text) +
-        f"--{boundary}\r\n".encode() +
-        f'Content-Disposition: form-data; name="file"; filename="{nombre}"\r\n'.encode() +
-        b"Content-Type: audio/webm\r\n\r\n" +
-        contenido +
-        f"\r\n--{boundary}--\r\n".encode()
-    )
-    req = urllib.request.Request(
-        "https://api.openai.com/v1/audio/transcriptions",
-        data=body,
-        headers={
-            "Authorization": f"Bearer {_api_key()}",
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read()).get("text", "").strip()
-    except urllib.error.HTTPError as e:
-        err = e.read().decode(errors="replace")
-        raise RuntimeError(f"Whisper {e.code}: {err}")
+    return transcript.text.strip()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -170,7 +115,7 @@ async def index(request: Request):
 
 @app.get("/health")
 async def health():
-    return {"version": "v6", "ok": True}
+    return {"ok": True, "platform": "railway"}
 
 
 @app.post("/chat")
@@ -192,7 +137,7 @@ async def chat(request: Request):
         loop.run_in_executor(None, _guardar_mensajes, session_id, pregunta, texto_completo)
         return JSONResponse({"respuesta": texto_completo, "session_id": session_id})
     except Exception as e:
-        print(f"[ERROR chat] {e}")
+        print(f"[ERROR chat] {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
