@@ -12,7 +12,6 @@ from supabase import create_client, Client
 import asyncio
 import uuid
 import io
-import json
 import os
 from dotenv import load_dotenv
 
@@ -27,18 +26,15 @@ if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-_openai_client: AsyncOpenAI | None = None
 _supabase_client: Client | None = None
 
-def get_openai() -> AsyncOpenAI:
-    global _openai_client
-    if _openai_client is None:
-        _openai_client = AsyncOpenAI(
-            api_key=os.getenv("OPENAI_API_KEY", OPENAI_API_KEY),
-            max_retries=0,
-            timeout=30.0,
-        )
-    return _openai_client
+def _new_openai() -> AsyncOpenAI:
+    """Crea un cliente AsyncOpenAI fresco — evita problemas de event loop en Vercel."""
+    return AsyncOpenAI(
+        api_key=os.getenv("OPENAI_API_KEY") or OPENAI_API_KEY,
+        max_retries=0,
+        timeout=25.0,
+    )
 
 def get_supabase() -> Client:
     global _supabase_client
@@ -95,17 +91,18 @@ async def chat(request: Request):
     mensajes = [{"role": "system", "content": get_cached_prompt()}] + historial
 
     try:
-        response = await get_openai().chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=mensajes,
-            temperature=0.7,
-            max_tokens=400,
-        )
+        async with _new_openai() as openai:
+            response = await openai.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=mensajes,
+                temperature=0.7,
+                max_tokens=400,
+            )
         texto_completo = response.choices[0].message.content or ""
         loop.run_in_executor(None, _guardar_mensajes, session_id, pregunta, texto_completo)
         return JSONResponse({"respuesta": texto_completo, "session_id": session_id})
     except Exception as e:
-        print(f"[ERROR OpenAI] {e}")
+        print(f"[ERROR OpenAI chat] {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -118,17 +115,18 @@ async def tts(request: Request):
         raise HTTPException(status_code=400, detail="Texto vacío")
 
     try:
-        response = await get_openai().audio.speech.create(
-            model="tts-1",
-            voice="ash",
-            input=texto,
-            response_format="mp3",
-            speed=1.2,
-        )
+        async with _new_openai() as openai:
+            response = await openai.audio.speech.create(
+                model="tts-1",
+                voice="ash",
+                input=texto,
+                response_format="mp3",
+                speed=1.2,
+            )
         audio_bytes = response.read()
         return StreamingResponse(io.BytesIO(audio_bytes), media_type="audio/mpeg")
     except Exception as e:
-        print(f"[ERROR TTS] {e}")
+        print(f"[ERROR TTS] {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail="Error al generar voz")
 
 
@@ -150,22 +148,23 @@ async def stt(audio: UploadFile = File(...)):
     nombre  = audio.filename or "audio.webm"
 
     try:
-        transcript = await get_openai().audio.transcriptions.create(
-            model="whisper-1",
-            file=(nombre, archivo, "audio/webm"),
-            language="es",
-            prompt=(
-                "Estudiante de la UAdeO Culiacán Sinaloa hablando con acento sinaloense. "
-                "Vocabulario esperado: kardex, credencial, beca, servicio social, "
-                "servicios escolares, biblioteca, edificio, carrera, coordinador, "
-                "titulación, trámite, horario, matrícula, semestre, prácticas, "
-                "UAdeO, Lince, aula, campus."
-            ),
-        )
+        async with _new_openai() as openai:
+            transcript = await openai.audio.transcriptions.create(
+                model="whisper-1",
+                file=(nombre, archivo, "audio/webm"),
+                language="es",
+                prompt=(
+                    "Estudiante de la UAdeO Culiacán Sinaloa hablando con acento sinaloense. "
+                    "Vocabulario esperado: kardex, credencial, beca, servicio social, "
+                    "servicios escolares, biblioteca, edificio, carrera, coordinador, "
+                    "titulación, trámite, horario, matrícula, semestre, prácticas, "
+                    "UAdeO, Lince, aula, campus."
+                ),
+            )
         texto = transcript.text.strip()
         return JSONResponse({"texto": texto})
     except Exception as e:
-        print(f"[ERROR Whisper] {e}")
+        print(f"[ERROR Whisper] {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail="Error en transcripción")
 
 
