@@ -882,22 +882,33 @@ async function _grabarConWhisper(onParcial, onFin) {
     // → reiniciar siempre el timer de silencio
     clearTimeout(silencioTimer);
     if (e.results[e.results.length - 1].isFinal) {
-      // Pausa natural detectada: esperar 2.5 s antes de cerrar
-      silencioTimer = setTimeout(() => terminar(), 2500);
+      // Pausa natural detectada: esperar 3 s antes de cerrar
+      silencioTimer = setTimeout(() => terminar(), 3000);
     } else {
       // Aún hablando (resultado parcial): dar más tiempo
-      silencioTimer = setTimeout(() => terminar(), 4000);
+      silencioTimer = setTimeout(() => terminar(), 5000);
     }
   };
 
   rec.onend = () => {
     _setMicLevel(0);
-    onFin(textoFinal.trim());
+    if (detenido) {
+      onFin(textoFinal.trim());
+      return;
+    }
+    // Chrome terminó solo por silencio — reiniciar para seguir escuchando
+    try { rec.start(); _setMicLevel(25); } catch {
+      detenido = true;
+      onFin(textoFinal.trim());
+    }
   };
 
   rec.onerror = (e) => {
     if (e.error === "no-speech") return; // ignorar silencio, seguir escuchando
     console.warn("[STT]", e.error);
+    if (!detenido) {
+      try { rec.start(); _setMicLevel(25); return; } catch {}
+    }
     _setMicLevel(0);
     onFin(textoFinal.trim());
   };
