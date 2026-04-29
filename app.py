@@ -91,31 +91,23 @@ async def chat(request: Request):
     historial.append({"role": "user", "content": pregunta})
     mensajes = [{"role": "system", "content": get_cached_prompt()}] + historial
 
-    async def stream_respuesta():
-        texto_completo = ""
-        try:
-            with get_openai().chat.completions.create(
+    try:
+        response = await loop.run_in_executor(
+            None,
+            lambda: get_openai().chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=mensajes,
                 temperature=0.7,
                 max_tokens=400,
-                stream=True,
-            ) as stream:
-                for chunk in stream:
-                    delta = chunk.choices[0].delta.content or ""
-                    if delta:
-                        texto_completo += delta
-                        yield f"data: {json.dumps({'chunk': delta})}\n\n"
-
-            # Guardar en DB sin bloquear y enviar señal de fin
-            loop.run_in_executor(None, _guardar_mensajes, session_id, pregunta, texto_completo)
-            yield f"data: {json.dumps({'done': True, 'session_id': session_id})}\n\n"
-
-        except Exception as e:
-            print(f"[ERROR OpenAI stream] {e}")
-            yield f"data: {json.dumps({'done': True, 'session_id': session_id, 'texto': texto_completo})}\n\n"
-
-    return StreamingResponse(stream_respuesta(), media_type="text/event-stream")
+                stream=False,
+            )
+        )
+        texto_completo = response.choices[0].message.content or ""
+        loop.run_in_executor(None, _guardar_mensajes, session_id, pregunta, texto_completo)
+        return JSONResponse({"respuesta": texto_completo, "session_id": session_id})
+    except Exception as e:
+        print(f"[ERROR OpenAI] {e}")
+        raise HTTPException(status_code=500, detail="Error al generar respuesta")
 
 
 @app.post("/tts")
