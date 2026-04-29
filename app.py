@@ -1,6 +1,6 @@
 """
-LINCE — Servidor web del asistente virtual UAdeO.
-Stack: FastAPI + httpx (sync) + Supabase
+LINCE v5 — Stack: FastAPI + urllib (nativo Python) + Supabase
+Sin dependencia del SDK de OpenAI — usa urllib directamente.
 """
 
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
@@ -8,11 +8,13 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from supabase import create_client, Client
-import httpx
 import asyncio
 import uuid
 import io
 import os
+import json
+import urllib.request
+import urllib.error
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -65,64 +67,109 @@ def _obtener_historial(session_id: str) -> list:
     )
     return list(reversed([{"role": r["role"], "content": r["content"]} for r in result.data]))
 
-# ── Llamadas a OpenAI con httpx sync (más estable en Vercel que httpx async) ──
+# ── OpenAI con urllib nativo (sin SDK, sin httpx) ─────────────────────────────
+
+def _openai_post(endpoint: str, payload: dict, timeout: int = 25) -> dict:
+    body = json.dumps(payload).encode()
+    req = urllib.request.Request(
+        f"https://api.openai.com/v1/{endpoint}",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {_api_key()}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body_err = e.read().decode(errors="replace")
+        raise RuntimeError(f"OpenAI HTTP {e.code}: {body_err}")
+    except Exception as e:
+        raise RuntimeError(f"OpenAI error: {type(e).__name__}: {e}")
 
 def _chat_sync(messages: list) -> str:
-    with httpx.Client(timeout=25.0) as client:
-        r = client.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {_api_key()}"},
-            json={
-                "model": OPENAI_MODEL,
-                "messages": messages,
-                "temperature": 0.7,
-                "max_tokens": 400,
-            },
-        )
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"] or ""
+    result = _openai_post("chat/completions", {
+        "model": OPENAI_MODEL,
+        "messages": messages,
+        "temperature": 0.7,
+        "max_tokens": 400,
+    })
+    return result["choices"][0]["message"]["content"] or ""
 
 def _tts_sync(texto: str) -> bytes:
-    with httpx.Client(timeout=30.0) as client:
-        r = client.post(
-            "https://api.openai.com/v1/audio/speech",
-            headers={"Authorization": f"Bearer {_api_key()}"},
-            json={
-                "model": "tts-1",
-                "voice": "ash",
-                "input": texto,
-                "response_format": "mp3",
-                "speed": 1.2,
-            },
-        )
-        r.raise_for_status()
-        return r.content
+    body = json.dumps({
+        "model": "tts-1",
+        "voice": "ash",
+        "input": texto,
+        "response_format": "mp3",
+        "speed": 1.2,
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/audio/speech",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {_api_key()}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return resp.read()
 
 def _stt_sync(nombre: str, contenido: bytes) -> str:
-    with httpx.Client(timeout=30.0) as client:
-        r = client.post(
-            "https://api.openai.com/v1/audio/transcriptions",
-            headers={"Authorization": f"Bearer {_api_key()}"},
-            data={
-                "model": "whisper-1",
-                "language": "es",
-                "prompt": (
-                    "Estudiante de la UAdeO Culiacán Sinaloa hablando con acento sinaloense. "
-                    "Vocabulario esperado: kardex, credencial, beca, servicio social, "
-                    "servicios escolares, biblioteca, edificio, carrera, coordinador, "
-                    "titulación, trámite, horario, matrícula, semestre, prácticas, "
-                    "UAdeO, Lince, aula, campus."
-                ),
-            },
-            files={"file": (nombre, contenido, "audio/webm")},
-        )
-        r.raise_for_status()
-        return r.json().get("text", "").strip()
+    import email.mime.multipart
+    import email.mime.base
+    # Multipart manual para Whisper
+    boundary = "----LinceBoundary7MA4YWxkTrZu0gW"
+    prompt_text = (
+        "Estudiante de la UAdeO Culiacán Sinaloa hablando con acento sinaloense. "
+        "Vocabulario: kardex, credencial, beca, servicio social, servicios escolares, "
+        "biblioteca, carrera, coordinador, titulación, trámite, matrícula, semestre, UAdeO."
+    )
+    def field(name: str, value: str) -> bytes:
+        return (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+            f"{value}\r\n"
+        ).encode()
+
+    body = (
+        field("model", "whisper-1") +
+        field("language", "es") +
+        field("prompt", prompt_text) +
+        f"--{boundary}\r\n".encode() +
+        f'Content-Disposition: form-data; name="file"; filename="{nombre}"\r\n'.encode() +
+        b"Content-Type: audio/webm\r\n\r\n" +
+        contenido +
+        f"\r\n--{boundary}--\r\n".encode()
+    )
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/audio/transcriptions",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {_api_key()}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read()).get("text", "").strip()
+    except urllib.error.HTTPError as e:
+        err = e.read().decode(errors="replace")
+        raise RuntimeError(f"Whisper {e.code}: {err}")
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     return templates.TemplateResponse(request=request, name="index.html")
+
+
+@app.get("/health")
+async def health():
+    return {"version": "v5", "ok": True}
 
 
 @app.post("/chat")
@@ -143,11 +190,8 @@ async def chat(request: Request):
         texto_completo = await loop.run_in_executor(None, _chat_sync, mensajes)
         loop.run_in_executor(None, _guardar_mensajes, session_id, pregunta, texto_completo)
         return JSONResponse({"respuesta": texto_completo, "session_id": session_id})
-    except httpx.HTTPStatusError as e:
-        print(f"[ERROR OpenAI] HTTP {e.response.status_code}: {e.response.text}")
-        raise HTTPException(status_code=500, detail=f"OpenAI {e.response.status_code}")
     except Exception as e:
-        print(f"[ERROR OpenAI] {type(e).__name__}: {e}")
+        print(f"[ERROR chat] {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -155,7 +199,6 @@ async def chat(request: Request):
 async def tts(request: Request):
     data = await request.json()
     texto = data.get("texto", "").strip()
-
     if not texto:
         raise HTTPException(status_code=400, detail="Texto vacío")
 
@@ -164,7 +207,7 @@ async def tts(request: Request):
         audio_bytes = await loop.run_in_executor(None, _tts_sync, texto)
         return StreamingResponse(io.BytesIO(audio_bytes), media_type="audio/mpeg")
     except Exception as e:
-        print(f"[ERROR TTS] {type(e).__name__}: {e}")
+        print(f"[ERROR TTS] {e}")
         raise HTTPException(status_code=500, detail="Error al generar voz")
 
 
@@ -188,7 +231,7 @@ async def stt(audio: UploadFile = File(...)):
         texto = await loop.run_in_executor(None, _stt_sync, nombre, contenido)
         return JSONResponse({"texto": texto})
     except Exception as e:
-        print(f"[ERROR Whisper] {type(e).__name__}: {e}")
+        print(f"[ERROR STT] {e}")
         raise HTTPException(status_code=500, detail="Error en transcripción")
 
 
