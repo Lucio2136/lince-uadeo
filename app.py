@@ -27,8 +27,23 @@ if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+_openai_client: OpenAI | None = None
+_supabase_client: Client | None = None
+
+def get_openai():
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", OPENAI_API_KEY))
+    return _openai_client
+
+def get_supabase():
+    global _supabase_client
+    if _supabase_client is None:
+        _supabase_client = create_client(
+            os.getenv("SUPABASE_URL", SUPABASE_URL),
+            os.getenv("SUPABASE_ANON_KEY", SUPABASE_ANON_KEY),
+        )
+    return _supabase_client
 
 _system_prompt_cache: str | None = None
 
@@ -40,14 +55,14 @@ def get_cached_prompt() -> str:
 
 def _guardar_mensajes(session_id: str, pregunta: str, respuesta: str):
     """Guarda ambos mensajes en Supabase en una sola llamada."""
-    supabase.table("conversaciones").insert([
+    get_supabase().table("conversaciones").insert([
         {"session_id": session_id, "role": "user",      "content": pregunta},
         {"session_id": session_id, "role": "assistant", "content": respuesta},
     ]).execute()
 
 def _obtener_historial(session_id: str) -> list:
     result = (
-        supabase.table("conversaciones")
+        get_supabase().table("conversaciones")
         .select("role, content")
         .eq("session_id", session_id)
         .order("created_at", desc=True)
@@ -79,7 +94,7 @@ async def chat(request: Request):
     async def stream_respuesta():
         texto_completo = ""
         try:
-            with openai_client.chat.completions.create(
+            with get_openai().chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=mensajes,
                 temperature=0.7,
@@ -116,7 +131,7 @@ async def tts(request: Request):
     try:
         response = await loop.run_in_executor(
             None,
-            lambda: openai_client.audio.speech.create(
+            lambda: get_openai().audio.speech.create(
                 model="tts-1",          # tts-1 es más rápido, buena calidad
                 voice="ash",
                 input=texto,
@@ -155,7 +170,7 @@ async def stt(audio: UploadFile = File(...)):
     try:
         transcript = await loop.run_in_executor(
             None,
-            lambda: openai_client.audio.transcriptions.create(
+            lambda: get_openai().audio.transcriptions.create(
                 model="whisper-1",
                 file=(nombre, archivo, "audio/webm"),
                 language="es",
@@ -187,6 +202,6 @@ async def reset(request: Request):
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
             None,
-            lambda: supabase.table("conversaciones").delete().eq("session_id", session_id).execute()
+            lambda: get_supabase().table("conversaciones").delete().eq("session_id", session_id).execute()
         )
     return JSONResponse({"ok": True})
