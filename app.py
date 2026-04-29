@@ -33,7 +33,11 @@ _supabase_client: Client | None = None
 def get_openai():
     global _openai_client
     if _openai_client is None:
-        _openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", OPENAI_API_KEY))
+        _openai_client = OpenAI(
+            api_key=os.getenv("OPENAI_API_KEY", OPENAI_API_KEY),
+            max_retries=0,
+            timeout=25.0,
+        )
     return _openai_client
 
 def get_supabase():
