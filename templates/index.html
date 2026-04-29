@@ -894,11 +894,11 @@ async function _grabarConWhisper(onParcial, onFin) {
     // → reiniciar siempre el timer de silencio
     clearTimeout(silencioTimer);
     if (e.results[e.results.length - 1].isFinal) {
-      // Pausa natural detectada: esperar 3 s antes de cerrar
-      silencioTimer = setTimeout(() => terminar(), 3000);
+      // Ya tiene texto final: cerrar en 1.5 s
+      silencioTimer = setTimeout(() => terminar(), 1500);
     } else {
-      // Aún hablando (resultado parcial): dar más tiempo
-      silencioTimer = setTimeout(() => terminar(), 5000);
+      // Aún hablando (parcial): esperar 3 s
+      silencioTimer = setTimeout(() => terminar(), 3000);
     }
   };
 
@@ -908,7 +908,14 @@ async function _grabarConWhisper(onParcial, onFin) {
       onFin(textoFinal.trim());
       return;
     }
-    // Chrome terminó solo por silencio — reiniciar para seguir escuchando
+    // Si ya captó texto → cerrar y enviar
+    if (textoFinal.trim()) {
+      detenido = true;
+      clearTimeout(silencioTimer);
+      onFin(textoFinal.trim());
+      return;
+    }
+    // Sin texto aún → reiniciar para seguir esperando que el usuario hable
     try { rec.start(); _setMicLevel(25); } catch {
       detenido = true;
       onFin(textoFinal.trim());
