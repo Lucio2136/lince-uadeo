@@ -1,14 +1,14 @@
 """
 LINCE — Servidor web del asistente virtual UAdeO.
-Stack: FastAPI + OpenAI + Supabase
+Stack: FastAPI + httpx (sync) + Supabase
 """
 
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from openai import AsyncOpenAI
 from supabase import create_client, Client
+import httpx
 import asyncio
 import uuid
 import io
@@ -28,14 +28,6 @@ templates = Jinja2Templates(directory="templates")
 
 _supabase_client: Client | None = None
 
-def _new_openai() -> AsyncOpenAI:
-    """Crea un cliente AsyncOpenAI fresco — evita problemas de event loop en Vercel."""
-    return AsyncOpenAI(
-        api_key=os.getenv("OPENAI_API_KEY") or OPENAI_API_KEY,
-        max_retries=0,
-        timeout=25.0,
-    )
-
 def get_supabase() -> Client:
     global _supabase_client
     if _supabase_client is None:
@@ -53,6 +45,9 @@ def get_cached_prompt() -> str:
         _system_prompt_cache = get_system_prompt()
     return _system_prompt_cache
 
+def _api_key() -> str:
+    return os.getenv("OPENAI_API_KEY") or OPENAI_API_KEY
+
 def _guardar_mensajes(session_id: str, pregunta: str, respuesta: str):
     get_supabase().table("conversaciones").insert([
         {"session_id": session_id, "role": "user",      "content": pregunta},
@@ -69,6 +64,60 @@ def _obtener_historial(session_id: str) -> list:
         .execute()
     )
     return list(reversed([{"role": r["role"], "content": r["content"]} for r in result.data]))
+
+# ── Llamadas a OpenAI con httpx sync (más estable en Vercel que httpx async) ──
+
+def _chat_sync(messages: list) -> str:
+    with httpx.Client(timeout=25.0) as client:
+        r = client.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {_api_key()}"},
+            json={
+                "model": OPENAI_MODEL,
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": 400,
+            },
+        )
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"] or ""
+
+def _tts_sync(texto: str) -> bytes:
+    with httpx.Client(timeout=30.0) as client:
+        r = client.post(
+            "https://api.openai.com/v1/audio/speech",
+            headers={"Authorization": f"Bearer {_api_key()}"},
+            json={
+                "model": "tts-1",
+                "voice": "ash",
+                "input": texto,
+                "response_format": "mp3",
+                "speed": 1.2,
+            },
+        )
+        r.raise_for_status()
+        return r.content
+
+def _stt_sync(nombre: str, contenido: bytes) -> str:
+    with httpx.Client(timeout=30.0) as client:
+        r = client.post(
+            "https://api.openai.com/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {_api_key()}"},
+            data={
+                "model": "whisper-1",
+                "language": "es",
+                "prompt": (
+                    "Estudiante de la UAdeO Culiacán Sinaloa hablando con acento sinaloense. "
+                    "Vocabulario esperado: kardex, credencial, beca, servicio social, "
+                    "servicios escolares, biblioteca, edificio, carrera, coordinador, "
+                    "titulación, trámite, horario, matrícula, semestre, prácticas, "
+                    "UAdeO, Lince, aula, campus."
+                ),
+            },
+            files={"file": (nombre, contenido, "audio/webm")},
+        )
+        r.raise_for_status()
+        return r.json().get("text", "").strip()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -91,18 +140,14 @@ async def chat(request: Request):
     mensajes = [{"role": "system", "content": get_cached_prompt()}] + historial
 
     try:
-        async with _new_openai() as openai:
-            response = await openai.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=mensajes,
-                temperature=0.7,
-                max_tokens=400,
-            )
-        texto_completo = response.choices[0].message.content or ""
+        texto_completo = await loop.run_in_executor(None, _chat_sync, mensajes)
         loop.run_in_executor(None, _guardar_mensajes, session_id, pregunta, texto_completo)
         return JSONResponse({"respuesta": texto_completo, "session_id": session_id})
+    except httpx.HTTPStatusError as e:
+        print(f"[ERROR OpenAI] HTTP {e.response.status_code}: {e.response.text}")
+        raise HTTPException(status_code=500, detail=f"OpenAI {e.response.status_code}")
     except Exception as e:
-        print(f"[ERROR OpenAI chat] {type(e).__name__}: {e}")
+        print(f"[ERROR OpenAI] {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -114,16 +159,9 @@ async def tts(request: Request):
     if not texto:
         raise HTTPException(status_code=400, detail="Texto vacío")
 
+    loop = asyncio.get_running_loop()
     try:
-        async with _new_openai() as openai:
-            response = await openai.audio.speech.create(
-                model="tts-1",
-                voice="ash",
-                input=texto,
-                response_format="mp3",
-                speed=1.2,
-            )
-        audio_bytes = response.read()
+        audio_bytes = await loop.run_in_executor(None, _tts_sync, texto)
         return StreamingResponse(io.BytesIO(audio_bytes), media_type="audio/mpeg")
     except Exception as e:
         print(f"[ERROR TTS] {type(e).__name__}: {e}")
@@ -144,24 +182,10 @@ async def stt(audio: UploadFile = File(...)):
     if len(contenido) < 200:
         return JSONResponse({"texto": ""})
 
-    archivo = io.BytesIO(contenido)
-    nombre  = audio.filename or "audio.webm"
-
+    nombre = audio.filename or "audio.webm"
+    loop = asyncio.get_running_loop()
     try:
-        async with _new_openai() as openai:
-            transcript = await openai.audio.transcriptions.create(
-                model="whisper-1",
-                file=(nombre, archivo, "audio/webm"),
-                language="es",
-                prompt=(
-                    "Estudiante de la UAdeO Culiacán Sinaloa hablando con acento sinaloense. "
-                    "Vocabulario esperado: kardex, credencial, beca, servicio social, "
-                    "servicios escolares, biblioteca, edificio, carrera, coordinador, "
-                    "titulación, trámite, horario, matrícula, semestre, prácticas, "
-                    "UAdeO, Lince, aula, campus."
-                ),
-            )
-        texto = transcript.text.strip()
+        texto = await loop.run_in_executor(None, _stt_sync, nombre, contenido)
         return JSONResponse({"texto": texto})
     except Exception as e:
         print(f"[ERROR Whisper] {type(e).__name__}: {e}")

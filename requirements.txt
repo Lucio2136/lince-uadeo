@@ -1,6 +1,6 @@
 fastapi
 uvicorn[standard]
-openai
+httpx
 supabase
 python-dotenv
 jinja2
