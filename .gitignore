@@ -1,0 +1,22 @@
+# Entorno virtual
+.venv/
+
+# Cache de Python
+__pycache__/
+*.pyc
+
+# Variables de entorno (API keys)
+.env
+
+# VS Code
+.vscode/
+
+# Claude Code
+.claude/
+
+# Archivos de audio de prueba
+*.mp3
+
+# Sistema
+.DS_Store
+Thumbs.db
