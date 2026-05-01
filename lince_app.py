@@ -1,16 +1,15 @@
 from __future__ import annotations
 import customtkinter as ctk
-import threading, queue, uuid, io, os, time, tempfile
+import threading, queue, uuid, io, os, time, tempfile, sqlite3
 import numpy as np
 import sounddevice as sd
 import scipy.io.wavfile as wavfile
 import pygame
 from openai import OpenAI
-from supabase import create_client
 from dotenv import load_dotenv
 
 load_dotenv()
-from config import OPENAI_API_KEY, OPENAI_MODEL, SUPABASE_URL, SUPABASE_ANON_KEY
+from config import OPENAI_API_KEY, OPENAI_MODEL
 from universidad_info import get_system_prompt
 
 BG     = "#0a0f1e"
@@ -35,9 +34,18 @@ ctk.set_default_color_theme("blue")
 class LinceApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.openai   = OpenAI(api_key=os.getenv("OPENAI_API_KEY") or OPENAI_API_KEY, timeout=25.0)
-        self.supabase = create_client(os.getenv("SUPABASE_URL", SUPABASE_URL),
-                                      os.getenv("SUPABASE_ANON_KEY", SUPABASE_ANON_KEY))
+        self.openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY") or OPENAI_API_KEY, timeout=25.0)
+        self.db = sqlite3.connect("lince_data.db", check_same_thread=False)
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS conversaciones (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT,
+                role       TEXT,
+                content    TEXT,
+                ts         DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.db.commit()
         self.prompt     = get_system_prompt()
         self.session_id = str(uuid.uuid4())
         self.historial  : list = []
@@ -48,9 +56,10 @@ class LinceApp(ctk.CTk):
 
         pygame.mixer.init()
         self.title("Lince Interactivo — UAdeO")
-        self.geometry("960x680")
         self.configure(fg_color=BG)
-        self.minsize(800, 560)
+        self.attributes("-fullscreen", True)
+        self.bind("<Escape>", lambda e: None)  # bloquea Escape en kiosco
+        self.protocol("WM_DELETE_WINDOW", lambda: None)  # bloquea el cierre
 
         self._ui()
         self._landing()
@@ -141,8 +150,10 @@ class LinceApp(ctk.CTk):
 
     def _reset(self):
         sid = self.session_id
-        threading.Thread(target=lambda: self.supabase.table("conversaciones")
-            .delete().eq("session_id", sid).execute(), daemon=True).start()
+        threading.Thread(target=lambda: (
+            self.db.execute("DELETE FROM conversaciones WHERE session_id=?", (sid,)),
+            self.db.commit()
+        ), daemon=True).start()
         self.historial = []; self.session_id = str(uuid.uuid4())
         for w in self.scroll.winfo_children(): w.destroy()
         self._landing()
@@ -223,10 +234,13 @@ class LinceApp(ctk.CTk):
                 messages=[{"role":"system","content":self.prompt}] + self.historial[-20:])
             resp = r.choices[0].message.content or ""
             self.historial.append({"role": "assistant", "content": resp})
-            threading.Thread(target=lambda: self.supabase.table("conversaciones").insert([
-                {"session_id": self.session_id, "role": "user",      "content": texto},
-                {"session_id": self.session_id, "role": "assistant", "content": resp},
-            ]).execute(), daemon=True).start()
+            threading.Thread(target=lambda: (
+                self.db.executemany(
+                    "INSERT INTO conversaciones (session_id, role, content) VALUES (?,?,?)",
+                    [(self.session_id, "user", texto), (self.session_id, "assistant", resp)]
+                ),
+                self.db.commit()
+            ), daemon=True).start()
             self.q.put(("resp", resp))
         except Exception as e:
             self.q.put(("err", str(e)))

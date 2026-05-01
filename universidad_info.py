@@ -1,23 +1,24 @@
 from __future__ import annotations
-import os
-from supabase import create_client, Client
-from dotenv import load_dotenv
+import json, os
 
-load_dotenv()
-
-_db: Client | None = None
-
-def _supabase() -> Client:
-    global _db
-    if _db is None:
-        _db = create_client(os.getenv("SUPABASE_URL", ""), os.getenv("SUPABASE_ANON_KEY", ""))
-    return _db
+_BASE = os.path.dirname(__file__)
 
 def _conocimiento() -> str:
+    path = os.path.join(_BASE, "universidad.json")
     try:
-        rows = _supabase().table("conocimiento").select("titulo, contenido") \
-               .eq("activo", True).order("categoria").execute().data
-        return "\n\n".join(f"- {r['titulo']}:\n  {r['contenido']}" for r in rows)
+        with open(path, encoding="utf-8") as f:
+            datos = json.load(f)
+        lineas = []
+        for r in datos:
+            linea = f"- {r.get('Tema','')} ({r.get('Departamento','')}):\n  {r.get('Informacion_Completa','')}"
+            if r.get("Pregunta_Frecuente"):
+                linea += f"\n  Preguntas frecuentes: {r['Pregunta_Frecuente']}"
+            if r.get("Contacto"):
+                linea += f"\n  Contacto: {r['Contacto']}"
+            lineas.append(linea)
+        return "\n\n".join(lineas)
+    except FileNotFoundError:
+        return "Base de conocimiento no cargada aún. Contacta a Servicios Escolares o visita www.udo.mx"
     except Exception as e:
         print(f"[conocimiento] {e}")
         return "Información no disponible."

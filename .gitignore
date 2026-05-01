@@ -14,6 +14,9 @@ __pycache__/
 # Claude Code
 .claude/
 
+# Base de datos local
+lince_data.db
+
 # Archivos de audio de prueba
 *.mp3
 
