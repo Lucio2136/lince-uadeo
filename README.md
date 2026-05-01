@@ -1,4 +1,4 @@
-# 🐾 Lince Interactivo — UAdeO Culiacán
+#  Lince Interactivo — UAdeO Culiacán
 
 Asistente virtual de escritorio para la Universidad Autónoma de Occidente. Responde preguntas de estudiantes por voz y texto usando inteligencia artificial.
 
