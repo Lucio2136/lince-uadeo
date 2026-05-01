@@ -11,8 +11,6 @@ __pycache__/
 # VS Code
 .vscode/
 
-# Claude Code
-.claude/
 
 # Base de datos local
 lince_data.db
