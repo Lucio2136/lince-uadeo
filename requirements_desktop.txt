@@ -1,0 +1,8 @@
+customtkinter
+openai
+supabase
+python-dotenv
+sounddevice
+scipy
+numpy
+pygame
