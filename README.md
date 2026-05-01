@@ -47,15 +47,15 @@ Abre una terminal en la carpeta del proyecto y ejecuta:
 pip install -r requirements_desktop.txt
 ```
 
-### 3. Configurar el API Key
+### 3. Configurar credenciales
 
 Crea un archivo llamado `.env` en la carpeta del proyecto con el siguiente contenido:
 
 ```
-OPENAI_API_KEY=aqui_va_tu_api_key
+OPENAI_API_KEY=solicitar_al_administrador
 ```
 
-> Para obtener un API key entra a [platform.openai.com](https://platform.openai.com), crea una cuenta y genera una clave en la sección **API Keys**.
+> Solicita la clave al administrador del proyecto antes de instalar.
 
 ### 4. Agregar la base de conocimiento (opcional)
 
