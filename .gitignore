@@ -1,23 +1,32 @@
 # Entorno virtual
 .venv/
+.venv-1/
 
 # Cache de Python
 __pycache__/
 *.pyc
+*.pyo
 
 # Variables de entorno (API keys)
 .env
 
-# VS Code
+# VS Code / Claude
 .vscode/
+.claude/
 
-
-# Base de datos local
+# Base de datos local (se genera al correr la app)
 lince_data.db
 
-# Archivos de audio de prueba
+# Índice FAISS (se genera automáticamente del JSON)
+faiss_index/
+
+# Archivos de audio temporales
 *.mp3
 
-# Sistema
+# Archivos comprimidos y binarios pesados
+*.zip
+*.pdf
+
+# Sistema operativo
 .DS_Store
 Thumbs.db

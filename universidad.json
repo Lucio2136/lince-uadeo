@@ -1,0 +1,98 @@
+[
+  {
+    "Departamento": "Admisiones",
+    "Categoria": "Requisito",
+    "Tema": "Documentos para inscripción",
+    "Informacion_Completa": "Acta de nacimiento original, CURP, certificado de preparatoria con promedio mínimo 7.0, 4 fotografías tamaño infantil, comprobante de domicilio reciente",
+    "Pregunta_Frecuente": "¿Qué documentos necesito para inscribirme? ¿Cuál es el promedio mínimo para entrar?",
+    "Contacto": "admisiones@universidad.edu / Ext. 101"
+  },
+  {
+    "Departamento": "Admisiones",
+    "Categoria": "Tramite",
+    "Tema": "Proceso de admisión",
+    "Informacion_Completa": "1. Comprar ficha de admisión, 2. Presentar examen de admisión, 3. Revisar resultados en la página web, 4. Acudir a inscripción con documentos",
+    "Pregunta_Frecuente": "¿Cómo me inscribo? ¿Cuándo son los exámenes de admisión?",
+    "Contacto": "admisiones@universidad.edu / Ext. 101"
+  },
+  {
+    "Departamento": "Admisiones",
+    "Categoria": "Costo",
+    "Tema": "Ficha de admisión",
+    "Informacion_Completa": "La ficha de admisión tiene un costo de $XXX pesos. Se puede pagar en caja de la universidad o en los bancos autorizados",
+    "Pregunta_Frecuente": "¿Cuánto cuesta la ficha? ¿Dónde puedo pagar?",
+    "Contacto": "caja@universidad.edu / Ext. 105"
+  },
+  {
+    "Departamento": "Ingeniería",
+    "Categoria": "Carrera",
+    "Tema": "Ingeniería en Sistemas Computacionales",
+    "Informacion_Completa": "Duración 9 semestres. Turno matutino 7am-1pm y vespertino 1pm-7pm. Total 240 créditos. Incluye área de programación, redes, bases de datos e inteligencia artificial",
+    "Pregunta_Frecuente": "¿Cuánto dura la carrera? ¿Hay turno nocturno? ¿Qué materias lleva?",
+    "Contacto": "ingenieria@universidad.edu / Ext. 201"
+  },
+  {
+    "Departamento": "Ingeniería",
+    "Categoria": "Carrera",
+    "Tema": "Ingeniería Industrial",
+    "Informacion_Completa": "Duración 9 semestres. Turno matutino. Total 230 créditos. Enfocada en procesos de producción, calidad, logística y gestión empresarial",
+    "Pregunta_Frecuente": "¿En qué trabaja un ingeniero industrial? ¿Cuántos semestres son?",
+    "Contacto": "ingenieria@universidad.edu / Ext. 201"
+  },
+  {
+    "Departamento": "Administración",
+    "Categoria": "Carrera",
+    "Tema": "Licenciatura en Administración de Empresas",
+    "Informacion_Completa": "Duración 8 semestres. Turno matutino y vespertino. Total 220 créditos. Áreas: finanzas, recursos humanos, mercadotecnia y operaciones",
+    "Pregunta_Frecuente": "¿Qué diferencia hay entre administración e ingeniería industrial?",
+    "Contacto": "administracion@universidad.edu / Ext. 210"
+  },
+  {
+    "Departamento": "Tesorería",
+    "Categoria": "Costo",
+    "Tema": "Colegiatura semestral",
+    "Informacion_Completa": "El costo de la colegiatura es de $XXX pesos por semestre. Fecha límite de pago: 10 de cada mes. Se puede pagar en caja, transferencia bancaria o portal en línea",
+    "Pregunta_Frecuente": "¿Cuánto cuesta el semestre? ¿Hasta qué fecha puedo pagar? ¿Aceptan tarjeta?",
+    "Contacto": "tesoreria@universidad.edu / Ext. 301"
+  },
+  {
+    "Departamento": "Tesorería",
+    "Categoria": "Tramite",
+    "Tema": "Becas disponibles",
+    "Informacion_Completa": "Existen becas de excelencia académica (promedio 9.0+), beca socioeconómica y beca deportiva. La convocatoria abre cada semestre en la primera semana de clases",
+    "Pregunta_Frecuente": "¿Cómo puedo conseguir una beca? ¿Cuáles son los requisitos?",
+    "Contacto": "becas@universidad.edu / Ext. 302"
+  },
+  {
+    "Departamento": "Servicios Escolares",
+    "Categoria": "Tramite",
+    "Tema": "Kardex y constancias",
+    "Informacion_Completa": "Las constancias de estudio y kardex se tramitan en ventanilla de Servicios Escolares. Tiempo de entrega: 3 días hábiles. Costo: $XXX por documento",
+    "Pregunta_Frecuente": "¿Cómo pido mi kardex? ¿Cuánto tarda una constancia?",
+    "Contacto": "escolar@universidad.edu / Ext. 401"
+  },
+  {
+    "Departamento": "Servicios Escolares",
+    "Categoria": "Tramite",
+    "Tema": "Titulación",
+    "Informacion_Completa": "Modalidades: tesis, proyecto, EGEL, promedio. Requisitos: haber cursado el 100% de créditos, servicio social liberado y no tener adeudos",
+    "Pregunta_Frecuente": "¿Cómo me titulo? ¿Cuáles son las opciones de titulación?",
+    "Contacto": "titulacion@universidad.edu / Ext. 402"
+  },
+  {
+    "Departamento": "Servicios Escolares",
+    "Categoria": "Tramite",
+    "Tema": "Servicio Social",
+    "Informacion_Completa": "Duración mínima 480 horas. Se puede realizar a partir del 70% de créditos aprobados. Entregar carta de aceptación en Servicios Escolares antes de iniciar",
+    "Pregunta_Frecuente": "¿Cuándo puedo hacer el servicio social? ¿Cuántas horas son?",
+    "Contacto": "escolar@universidad.edu / Ext. 401"
+  },
+  {
+    "Departamento": "Biblioteca",
+    "Categoria": "Servicio",
+    "Tema": "Préstamo de libros",
+    "Informacion_Completa": "Préstamo a domicilio: 3 libros por 7 días. Sala de lectura abierta de lunes a viernes 7am-9pm y sábados 8am-2pm. Se requiere credencial vigente",
+    "Pregunta_Frecuente": "¿Cuántos libros puedo sacar? ¿En qué horario está abierta la biblioteca?",
+    "Contacto": "biblioteca@universidad.edu / Ext. 501"
+  }
+]

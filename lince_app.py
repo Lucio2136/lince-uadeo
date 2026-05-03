@@ -1,40 +1,150 @@
 from __future__ import annotations
-import customtkinter as ctk
-import threading, queue, uuid, io, os, time, tempfile, sqlite3
+import threading
+import queue
+import uuid
+import io
+import os
+import time
+import tempfile
+import sqlite3
+from dataclasses import dataclass
+
 import numpy as np
 import sounddevice as sd
 import scipy.io.wavfile as wavfile
 import pygame
-from openai import OpenAI
-from dotenv import load_dotenv
+import customtkinter as ctk
 
-load_dotenv()
 from config import OPENAI_API_KEY, OPENAI_MODEL
-from universidad_info import get_system_prompt
+from universidad_info import get_system_prompt, get_system_prompt_con_contexto
+import monitoring
 
-BG     = "#0a0f1e"
-CARD   = "#111827"
-BLUE   = "#4f46e5"
-TEXT   = "#e2e8f0"
-MUTED  = "#64748b"
-U_CLR  = "#1e3a5f"
-B_CLR  = "#1a1f2e"
-RED    = "#dc2626"
+# ── Paleta de colores ─────────────────────────────────────────────────────────
+BG            = "#FFFFFF"
+CARD          = "#111827"
+BLUE          = "#4f46e5"
+TEXT          = "#0a0f1e"
+MUTED         = "#64748b"
+COLOR_USUARIO = "#1e3a5f"
+COLOR_BOT     = "#1a1f2e"
+RED           = "#dc2626"
+GREEN         = "#16a34a"
 
-SR        = 16000    # sample rate
-THRESHOLD = 0.015    # detección de voz
-SIL_SEC   = 1.5      # silencio para cortar grabación
-MAX_WAIT  = 8.0      # espera máxima antes de hablar
-INACT_S   = 60       # inactividad para volver al inicio
+# ── Configuración de audio ────────────────────────────────────────────────────
+SAMPLE_RATE    = 16000  # Hz
+VOZ_UMBRAL     = 0.015  # nivel mínimo de volumen para detectar voz
+SILENCIO_SEG   = 1.5    # segundos de silencio para cortar la grabación
+ESPERA_MAX_SEG = 8.0    # segundos esperando voz antes de abandonar
+INACTIVIDAD_S  = 60     # segundos sin actividad para volver a la pantalla de inicio
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 
-class LinceApp(ctk.CTk):
+# ── Modos de ejecución ────────────────────────────────────────────────────────
+
+@dataclass
+class ModoApp:
+    nombre:          str
+    descripcion:     str
+    fullscreen:      bool
+    bloquear_cierre: bool
+    ancho:           int = 0
+    alto:            int = 0
+    color_badge:     str = BLUE
+
+MODOS: list[ModoApp] = [
+    ModoApp(
+        nombre="Normal",
+        descripcion="Ventana redimensionable · ideal para desarrollo y pruebas",
+        fullscreen=False, bloquear_cierre=False,
+        ancho=1100, alto=760, color_badge=BLUE,
+    ),
+    ModoApp(
+        nombre="Compacto",
+        descripcion="Ventana pequeña fija · para pantallas o monitores reducidos",
+        fullscreen=False, bloquear_cierre=False,
+        ancho=820, alto=600, color_badge="#0891b2",
+    ),
+    ModoApp(
+        nombre="Kiosco",
+        descripcion="Pantalla completa bloqueada · modo producción en campus",
+        fullscreen=True, bloquear_cierre=True,
+        color_badge=GREEN,
+    ),
+]
+
+
+# ── Selector de modo ──────────────────────────────────────────────────────────
+
+class SelectorModo(ctk.CTk):
+    """Ventana pequeña que se muestra al inicio para elegir el modo de ejecución."""
+
     def __init__(self):
         super().__init__()
-        self.openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY") or OPENAI_API_KEY, timeout=25.0)
+        self.modo_elegido: ModoApp | None = None
+        self.title("Lince — Seleccionar modo")
+        self.configure(fg_color=BG)
+        self.resizable(False, False)
+        self._construir()
+        self._centrar(460, 400)
+
+    def _centrar(self, ancho: int, alto: int):
+        x = (self.winfo_screenwidth()  - ancho) // 2
+        y = (self.winfo_screenheight() - alto)  // 2
+        self.geometry(f"{ancho}x{alto}+{x}+{y}")
+
+    def _construir(self):
+        ctk.CTkLabel(self, text="🐾", font=("Segoe UI Emoji", 48)).pack(pady=(28, 2))
+        ctk.CTkLabel(self, text="Lince Interactivo", font=("Arial", 20, "bold"), text_color=TEXT).pack()
+        ctk.CTkLabel(self, text="Selecciona el modo de ejecución", font=("Arial", 12), text_color=MUTED).pack(pady=(4, 20))
+
+        for modo in MODOS:
+            contenedor = ctk.CTkFrame(self, fg_color=CARD, corner_radius=12)
+            contenedor.pack(fill="x", padx=30, pady=5)
+            contenedor.grid_columnconfigure(1, weight=1)
+
+            ctk.CTkFrame(contenedor, fg_color=modo.color_badge, width=6, corner_radius=3
+                ).grid(row=0, column=0, rowspan=2, padx=(12, 10), pady=12, sticky="ns")
+
+            ctk.CTkLabel(contenedor, text=modo.nombre, font=("Arial", 13, "bold"), text_color=TEXT
+                ).grid(row=0, column=1, sticky="w", pady=(10, 0))
+            ctk.CTkLabel(contenedor, text=modo.descripcion, font=("Arial", 10), text_color=MUTED, wraplength=280, justify="left"
+                ).grid(row=1, column=1, sticky="w", pady=(0, 10))
+
+            ctk.CTkButton(
+                contenedor, text="Iniciar", font=("Arial", 12, "bold"),
+                fg_color=modo.color_badge, hover_color=BLUE,
+                width=80, height=32, corner_radius=16,
+                command=lambda m=modo: self._elegir(m),
+            ).grid(row=0, column=2, rowspan=2, padx=12)
+
+    def _elegir(self, modo: ModoApp):
+        self.modo_elegido = modo
+        self.destroy()
+
+
+# ── Aplicación principal ──────────────────────────────────────────────────────
+
+class LinceApp(ctk.CTk):
+    def __init__(self, modo: ModoApp):
+        super().__init__()
+        self.modo = modo
+        self._iniciar_cliente_openai()
+        self._iniciar_base_de_datos()
+        self._iniciar_estado()
+        self._iniciar_ventana()
+        self._construir_ui()
+        self._mostrar_inicio()
+        self._procesar_eventos()
+        self._vigilar_inactividad()
+
+    # ── Inicialización ────────────────────────────────────────────────────────
+
+    def _iniciar_cliente_openai(self):
+        self.cliente = monitoring.get_openai_client(OPENAI_API_KEY, timeout=25.0)
+
+    def _iniciar_base_de_datos(self):
         self.db = sqlite3.connect("lince_data.db", check_same_thread=False)
         self.db.execute("""
             CREATE TABLE IF NOT EXISTS conversaciones (
@@ -46,273 +156,419 @@ class LinceApp(ctk.CTk):
             )
         """)
         self.db.commit()
+
+    def _iniciar_estado(self):
         self.prompt     = get_system_prompt()
+        self.rag        = None
         self.session_id = str(uuid.uuid4())
-        self.historial  : list = []
+        self.historial  : list[dict] = []
         self.grabando   = False
         self.procesando = False
-        self.q          = queue.Queue()
-        self._ultimo    = time.time()
-
+        self.eventos    = queue.Queue()
+        self.ultimo_uso = time.time()
         pygame.mixer.init()
-        self.title("Lince Interactivo — UAdeO")
+        threading.Thread(target=self._iniciar_rag, daemon=True).start()
+
+    def _iniciar_rag(self):
+        try:
+            from rag_engine import RAGEngine
+            self.rag = RAGEngine(OPENAI_API_KEY)
+        except Exception:
+            pass
+
+    def _iniciar_ventana(self):
+        self.title(f"Lince Interactivo — UAdeO  [{self.modo.nombre}]")
         self.configure(fg_color=BG)
-        self.attributes("-fullscreen", True)
-        self.bind("<Escape>", lambda e: None)  # bloquea Escape en kiosco
-        self.protocol("WM_DELETE_WINDOW", lambda: None)  # bloquea el cierre
+        if self.modo.fullscreen:
+            self.attributes("-fullscreen", True)
+        else:
+            self.resizable(True, True)
+            self._centrar_ventana(self.modo.ancho, self.modo.alto)
+        if self.modo.bloquear_cierre:
+            self.bind("<Escape>", lambda _: None)
+            self.protocol("WM_DELETE_WINDOW", lambda: None)
 
-        self._ui()
-        self._landing()
-        self._poll()
-        self._inact_watch()
+    def _centrar_ventana(self, ancho: int, alto: int):
+        x = (self.winfo_screenwidth()  - ancho) // 2
+        y = (self.winfo_screenheight() - alto)  // 2
+        self.geometry(f"{ancho}x{alto}+{x}+{y}")
 
-    # ── UI ────────────────────────────────────────────────────
+    # ── Construcción de la UI ─────────────────────────────────────────────────
 
-    def _ui(self):
+    def _construir_ui(self):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
+        self._construir_pantalla_inicio()
+        self._construir_pantalla_chat()
 
-        # LANDING
-        self.fl = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
-        self.fl.grid(row=0, column=0, sticky="nsew")
-        self.fl.grid_columnconfigure(0, weight=1)
-        self.fl.grid_rowconfigure(0, weight=1)
+    def _construir_pantalla_inicio(self):
+        self.frame_inicio = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+        self.frame_inicio.grid(row=0, column=0, sticky="nsew")
+        self.frame_inicio.grid_columnconfigure(0, weight=1)
+        self.frame_inicio.grid_rowconfigure(0, weight=1)
 
-        c = ctk.CTkFrame(self.fl, fg_color="transparent")
-        c.grid(row=0, column=0)
-        ctk.CTkLabel(c, text="🐾", font=("Segoe UI Emoji", 72)).pack(pady=(0,6))
-        ctk.CTkLabel(c, text="LINCE INTERACTIVO", font=("Arial",34,"bold"), text_color=TEXT).pack()
-        ctk.CTkLabel(c, text="Asistente Virtual · UAdeO Culiacán", font=("Arial",15), text_color=MUTED).pack(pady=(4,36))
+        contenedor = ctk.CTkFrame(self.frame_inicio, fg_color="transparent")
+        contenedor.grid(row=0, column=0)
 
-        self.btn_mic_l = ctk.CTkButton(c, text="🎤", font=("Segoe UI Emoji",34),
-            width=120, height=120, corner_radius=60, fg_color=BLUE, hover_color="#3730a3",
-            command=self._mic_l)
-        self.btn_mic_l.pack(pady=10)
+        ctk.CTkLabel(contenedor, text="🐾", font=("Segoe UI Emoji", 72)).pack(pady=(0, 6))
+        ctk.CTkLabel(contenedor, text="LINCE INTERACTIVO", font=("Arial", 34, "bold"), text_color=TEXT).pack()
+        ctk.CTkLabel(contenedor, text="Asistente Virtual · UAdeO Culiacán", font=("Arial", 15), text_color=MUTED).pack(pady=(4, 36))
 
-        self.lbl_l = ctk.CTkLabel(c, text="Presiona y habla", font=("Arial",14), text_color=MUTED)
-        self.lbl_l.pack(pady=10)
+        self.btn_mic_inicio = ctk.CTkButton(
+            contenedor, text="🎤", font=("Segoe UI Emoji", 34),
+            width=120, height=120, corner_radius=60,
+            fg_color=BLUE, hover_color="#3730a3",
+            command=self._mic_inicio,
+        )
+        self.btn_mic_inicio.pack(pady=10)
 
-        chips = ctk.CTkFrame(c, fg_color="transparent")
-        chips.pack(pady=16)
-        for t in ["¿Qué carreras ofrecen?","¿Cómo me inscribo?","¿Cómo saco mi credencial?","¿Qué becas hay?"]:
-            ctk.CTkButton(chips, text=t, font=("Arial",12), fg_color=CARD, hover_color="#1e2a3a",
-                text_color=TEXT, corner_radius=20, height=36,
-                command=lambda x=t: self._chip(x)).pack(side="left", padx=5)
+        self.lbl_estado_inicio = ctk.CTkLabel(
+            contenedor, text="Presiona y habla", font=("Arial", 14), text_color=MUTED,
+        )
+        self.lbl_estado_inicio.pack(pady=10)
 
-        # CHAT
-        self.fc = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
-        self.fc.grid(row=0, column=0, sticky="nsew")
-        self.fc.grid_columnconfigure(0, weight=1)
-        self.fc.grid_rowconfigure(1, weight=1)
+        preguntas_rapidas = ctk.CTkFrame(contenedor, fg_color="transparent")
+        preguntas_rapidas.pack(pady=16)
+        preguntas = [
+            "¿Qué carreras ofrecen?",
+            "¿Cómo me inscribo?",
+            "¿Cómo saco mi credencial?",
+            "¿Qué becas hay?",
+        ]
+        for pregunta in preguntas:
+            ctk.CTkButton(
+                preguntas_rapidas, text=pregunta, font=("Arial", 12),
+                fg_color=CARD, hover_color="#1e2a3a", text_color=TEXT,
+                corner_radius=20, height=36,
+                command=lambda p=pregunta: self._pregunta_rapida(p),
+            ).pack(side="left", padx=5)
 
-        h = ctk.CTkFrame(self.fc, fg_color=CARD, height=58, corner_radius=0)
-        h.grid(row=0, column=0, sticky="ew")
-        h.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(h, text="🐾  Lince Interactivo", font=("Arial",16,"bold"), text_color=TEXT
-            ).grid(row=0, column=0, padx=20, pady=16, sticky="w")
-        ctk.CTkButton(h, text="↺  Nueva conversación", font=("Arial",12),
+    def _construir_pantalla_chat(self):
+        self.frame_chat = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+        self.frame_chat.grid(row=0, column=0, sticky="nsew")
+        self.frame_chat.grid_columnconfigure(0, weight=1)
+        self.frame_chat.grid_rowconfigure(1, weight=1)
+
+        encabezado = ctk.CTkFrame(self.frame_chat, fg_color=CARD, height=58, corner_radius=0)
+        encabezado.grid(row=0, column=0, sticky="ew")
+        encabezado.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(
+            encabezado, text="🐾  Lince Interactivo",
+            font=("Arial", 16, "bold"), text_color=TEXT,
+        ).grid(row=0, column=0, padx=20, pady=16, sticky="w")
+        ctk.CTkButton(
+            encabezado, text="↺  Nueva conversación", font=("Arial", 12),
             fg_color="transparent", hover_color="#1e2a3a", text_color=MUTED, width=170,
-            command=self._reset).grid(row=0, column=2, padx=16)
+            command=self._nueva_sesion,
+        ).grid(row=0, column=2, padx=16)
 
-        self.scroll = ctk.CTkScrollableFrame(self.fc, fg_color=BG, corner_radius=0)
+        self.scroll = ctk.CTkScrollableFrame(self.frame_chat, fg_color=BG, corner_radius=0)
         self.scroll.grid(row=1, column=0, sticky="nsew")
         self.scroll.grid_columnconfigure(0, weight=1)
 
-        f = ctk.CTkFrame(self.fc, fg_color=CARD, corner_radius=0)
-        f.grid(row=2, column=0, sticky="ew")
-        f.grid_columnconfigure(1, weight=1)
+        pie = ctk.CTkFrame(self.frame_chat, fg_color=CARD, corner_radius=0)
+        pie.grid(row=2, column=0, sticky="ew")
+        pie.grid_columnconfigure(1, weight=1)
 
-        self.btn_mic_c = ctk.CTkButton(f, text="🎤", font=("Segoe UI Emoji",20),
-            width=52, height=52, corner_radius=26, fg_color=BLUE, hover_color="#3730a3",
-            command=self._mic_c)
-        self.btn_mic_c.grid(row=0, column=0, padx=(14,8), pady=14)
+        self.btn_mic_chat = ctk.CTkButton(
+            pie, text="🎤", font=("Segoe UI Emoji", 20),
+            width=52, height=52, corner_radius=26,
+            fg_color=BLUE, hover_color="#3730a3",
+            command=self._mic_chat,
+        )
+        self.btn_mic_chat.grid(row=0, column=0, padx=(14, 8), pady=14)
 
-        self.entry = ctk.CTkEntry(f, placeholder_text="Escribe tu pregunta...",
-            font=("Arial",14), height=44, corner_radius=22)
-        self.entry.grid(row=0, column=1, padx=8, pady=14, sticky="ew")
-        self.entry.bind("<Return>", lambda _: self._enviar())
+        self.entrada = ctk.CTkEntry(
+            pie, placeholder_text="Escribe tu pregunta...",
+            font=("Arial", 14), height=44, corner_radius=22,
+        )
+        self.entrada.grid(row=0, column=1, padx=8, pady=14, sticky="ew")
+        self.entrada.bind("<Return>", lambda _: self._enviar_texto())
 
-        ctk.CTkButton(f, text="Enviar", font=("Arial",13,"bold"),
-            fg_color=BLUE, hover_color="#3730a3", width=80, height=44, corner_radius=22,
-            command=self._enviar).grid(row=0, column=2, padx=(8,14), pady=14)
+        ctk.CTkButton(
+            pie, text="Enviar", font=("Arial", 13, "bold"),
+            fg_color=BLUE, hover_color="#3730a3",
+            width=80, height=44, corner_radius=22,
+            command=self._enviar_texto,
+        ).grid(row=0, column=2, padx=(8, 14), pady=14)
 
-        self.lbl_c = ctk.CTkLabel(f, text="", font=("Arial",11), text_color=MUTED)
-        self.lbl_c.grid(row=1, column=0, columnspan=3, pady=(0,6))
+        self.lbl_estado_chat = ctk.CTkLabel(pie, text="", font=("Arial", 11), text_color=MUTED)
+        self.lbl_estado_chat.grid(row=1, column=0, columnspan=3, pady=(0, 6))
 
-    # ── Vistas ───────────────────────────────────────────────
+    # ── Navegación entre pantallas ────────────────────────────────────────────
 
-    def _landing(self):
-        self.fc.grid_remove(); self.fl.grid()
-        self._st("Presiona y habla")
+    def _mostrar_inicio(self):
+        self.frame_chat.grid_remove()
+        self.frame_inicio.grid()
+        self._set_estado("Presiona y habla")
 
-    def _chat(self):
-        self.fl.grid_remove(); self.fc.grid()
+    def _mostrar_chat(self):
+        self.frame_inicio.grid_remove()
+        self.frame_chat.grid()
 
-    def _reset(self):
-        sid = self.session_id
-        threading.Thread(target=lambda: (
-            self.db.execute("DELETE FROM conversaciones WHERE session_id=?", (sid,)),
-            self.db.commit()
-        ), daemon=True).start()
-        self.historial = []; self.session_id = str(uuid.uuid4())
-        for w in self.scroll.winfo_children(): w.destroy()
-        self._landing()
+    def _nueva_sesion(self):
+        threading.Thread(target=self._limpiar_sesion_db, args=(self.session_id,), daemon=True).start()
+        self.historial = []
+        self.session_id = str(uuid.uuid4())
+        for widget in self.scroll.winfo_children():
+            widget.destroy()
+        self._mostrar_inicio()
 
-    # ── Micrófono ────────────────────────────────────────────
+    # ── Micrófono ─────────────────────────────────────────────────────────────
 
-    def _mic_l(self):
-        if not self.grabando and not self.procesando: self._grabar(True)
+    def _mic_inicio(self):
+        if not self.grabando and not self.procesando:
+            self._iniciar_grabacion(desde_inicio=True)
 
-    def _mic_c(self):
-        if not self.grabando and not self.procesando: self._grabar(False)
+    def _mic_chat(self):
+        if not self.grabando and not self.procesando:
+            self._iniciar_grabacion(desde_inicio=False)
 
-    def _grabar(self, landing: bool):
+    def _iniciar_grabacion(self, desde_inicio: bool):
         self.grabando = True
-        self.btn_mic_l.configure(fg_color=RED)
-        self.btn_mic_c.configure(fg_color=RED)
-        self._st("🎤  Habla ahora...")
-        threading.Thread(target=self._grabar_t, args=(landing,), daemon=True).start()
+        self.btn_mic_inicio.configure(fg_color=RED)
+        self.btn_mic_chat.configure(fg_color=RED)
+        self._set_estado("🎤  Habla ahora...")
+        threading.Thread(target=self._transcribir_audio, args=(desde_inicio,), daemon=True).start()
 
-    def _grabar_t(self, landing: bool):
+    def _transcribir_audio(self, desde_inicio: bool):
         try:
-            buf = self._vad()
-            if buf is None:
-                self.q.put(("rst", "No se detectó voz.")); return
-            self.q.put(("st", "Procesando..."))
-            buf.name = "audio.wav"
-            t = self.openai.audio.transcriptions.create(
-                model="whisper-1", file=buf, language="es",
-                prompt="UAdeO Culiacán: kardex, credencial, beca, carrera, matrícula.")
-            texto = t.text.strip()
-            self.q.put(("env", (texto, landing)) if texto else ("rst", "No te entendí."))
+            audio = self._capturar_audio()
+            if audio is None:
+                self.eventos.put(("rst", "No se detectó voz."))
+                return
+            self.eventos.put(("st", "Procesando..."))
+            audio.name = "audio.wav"
+            resultado = self.cliente.audio.transcriptions.create(
+                model="whisper-1", file=audio, language="es",
+                prompt="UAdeO Culiacán: kardex, credencial, beca, carrera, matrícula.",
+            )
+            texto = resultado.text.strip()
+            if texto:
+                self.eventos.put(("env", (texto, desde_inicio)))
+            else:
+                self.eventos.put(("rst", "No te entendí."))
         except Exception as e:
-            self.q.put(("rst", f"Error mic: {e}"))
+            self.eventos.put(("rst", f"Error mic: {e}"))
 
-    def _vad(self) -> io.BytesIO | None:
-        chunks, hablando, sil, esp = [], False, 0, 0
-        chunk = 0.1
-        max_sil = int(SIL_SEC / chunk)
-        max_esp = int(MAX_WAIT / chunk)
-        with sd.InputStream(samplerate=SR, channels=1, dtype="float32") as s:
+    def _capturar_audio(self) -> io.BytesIO | None:
+        # Detección de actividad de voz: graba mientras hay sonido y corta al silencio
+        frames = []
+        hablando = False
+        contador_silencio = 0
+        contador_espera   = 0
+        duracion_chunk = 0.1
+        max_silencio   = int(SILENCIO_SEG / duracion_chunk)
+        max_espera     = int(ESPERA_MAX_SEG / duracion_chunk)
+
+        with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32") as stream:
             while True:
-                d, _ = s.read(int(SR * chunk))
-                v = float(np.sqrt(np.mean(d**2)))
-                if v > THRESHOLD:
-                    hablando = True; sil = 0; chunks.append(d.copy())
+                datos, _ = stream.read(int(SAMPLE_RATE * duracion_chunk))
+                volumen = float(np.sqrt(np.mean(datos**2)))
+
+                if volumen > VOZ_UMBRAL:
+                    hablando = True
+                    contador_silencio = 0
+                    frames.append(datos.copy())
                 elif hablando:
-                    chunks.append(d.copy()); sil += 1
-                    if sil >= max_sil: break
+                    frames.append(datos.copy())
+                    contador_silencio += 1
+                    if contador_silencio >= max_silencio:
+                        break
                 else:
-                    esp += 1
-                    if esp >= max_esp: return None
-        audio = np.concatenate(chunks)
-        buf = io.BytesIO()
-        wavfile.write(buf, SR, (audio * 32767).astype(np.int16))
-        buf.seek(0)
-        return buf
+                    contador_espera += 1
+                    if contador_espera >= max_espera:
+                        return None
 
-    # ── Chat ─────────────────────────────────────────────────
+        audio = np.concatenate(frames)
+        buffer = io.BytesIO()
+        wavfile.write(buffer, SAMPLE_RATE, (audio * 32767).astype(np.int16))
+        buffer.seek(0)
+        return buffer
 
-    def _chip(self, t): self._proc(t, True)
+    # ── Procesamiento del chat ────────────────────────────────────────────────
 
-    def _enviar(self):
-        t = self.entry.get().strip()
-        if t and not self.procesando:
-            self.entry.delete(0, "end"); self._proc(t, False)
+    def _pregunta_rapida(self, texto: str):
+        self._procesar(texto, desde_inicio=True)
 
-    def _proc(self, texto: str, landing: bool):
-        if landing: self._chat()
-        self.procesando = True; self._ultimo = time.time()
-        self._burbuja(texto, "user"); self._st("Lince está pensando...")
-        threading.Thread(target=self._chat_t, args=(texto,), daemon=True).start()
+    def _enviar_texto(self):
+        texto = self.entrada.get().strip()
+        if texto and not self.procesando:
+            self.entrada.delete(0, "end")
+            self._procesar(texto, desde_inicio=False)
 
-    def _chat_t(self, texto: str):
+    def _procesar(self, texto: str, desde_inicio: bool):
+        if desde_inicio:
+            self._mostrar_chat()
+        self.procesando = True
+        self.ultimo_uso = time.time()
+        self._agregar_mensaje(texto, "user")
+        self._set_estado("Lince está pensando...")
+        threading.Thread(target=self._responder, args=(texto,), daemon=True).start()
+
+    def _responder(self, texto: str):
         try:
             self.historial.append({"role": "user", "content": texto})
-            r = self.openai.chat.completions.create(
-                model=OPENAI_MODEL, temperature=0.7, max_tokens=400,
-                messages=[{"role":"system","content":self.prompt}] + self.historial[-20:])
-            resp = r.choices[0].message.content or ""
-            self.historial.append({"role": "assistant", "content": resp})
-            threading.Thread(target=lambda: (
-                self.db.executemany(
-                    "INSERT INTO conversaciones (session_id, role, content) VALUES (?,?,?)",
-                    [(self.session_id, "user", texto), (self.session_id, "assistant", resp)]
-                ),
-                self.db.commit()
-            ), daemon=True).start()
-            self.q.put(("resp", resp))
-        except Exception as e:
-            self.q.put(("err", str(e)))
+            if self.rag and self.rag.disponible:
+                contexto_conv = " ".join(
+                    m["content"] for m in self.historial[-6:] if m["role"] == "user"
+                )
+                contexto = self.rag.buscar(f"{contexto_conv} {texto}".strip())
+                prompt = get_system_prompt_con_contexto(contexto)
+            else:
+                prompt = self.prompt
 
-    def _tts_t(self, texto: str):
+            with monitoring.TraceLlamada(self.session_id, texto) as trace:
+                respuesta_api = self.cliente.chat.completions.create(
+                    model=OPENAI_MODEL,
+                    temperature=0.7,
+                    max_tokens=700,
+                    messages=[{"role": "system", "content": prompt}] + self.historial[-20:],
+                )
+                respuesta = respuesta_api.choices[0].message.content or ""
+                uso = respuesta_api.usage
+                trace.registrar_respuesta(
+                    respuesta,
+                    tokens_entrada=uso.prompt_tokens if uso else 0,
+                    tokens_salida=uso.completion_tokens if uso else 0,
+                )
+
+            self.historial.append({"role": "assistant", "content": respuesta})
+            threading.Thread(
+                target=self._guardar_mensajes,
+                args=(self.session_id, texto, respuesta),
+                daemon=True,
+            ).start()
+            self.eventos.put(("resp", respuesta))
+        except Exception as e:
+            self.eventos.put(("err", str(e)))
+
+    def _reproducir_voz(self, texto: str):
+        path = None
         try:
-            data = self.openai.audio.speech.create(
+            audio_mp3 = self.cliente.audio.speech.create(
                 model="tts-1", voice="ash", input=texto,
-                response_format="mp3", speed=1.2).read()
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
-                f.write(data); path = f.name
-            pygame.mixer.music.load(path); pygame.mixer.music.play()
-            while pygame.mixer.music.get_busy(): time.sleep(0.1)
-            pygame.mixer.music.unload(); os.unlink(path)
-        except Exception as e:
-            print(f"[TTS] {e}")
+                response_format="mp3", speed=1.2,
+            ).read()
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as archivo:
+                archivo.write(audio_mp3)
+                path = archivo.name
+            pygame.mixer.music.load(path)
+            pygame.mixer.music.play()
+            while pygame.mixer.music.get_busy():
+                time.sleep(0.1)
+            pygame.mixer.music.unload()
+        except Exception:
+            pass
         finally:
-            self.q.put(("tts_end", None))
+            if path:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            self.eventos.put(("tts_end", None))
 
-    # ── UI helpers ───────────────────────────────────────────
+    # ── Base de datos ─────────────────────────────────────────────────────────
 
-    def _burbuja(self, texto: str, rol: str):
-        user = rol == "user"
-        row  = len(self.scroll.winfo_children())
-        f = ctk.CTkFrame(self.scroll, fg_color=U_CLR if user else B_CLR, corner_radius=14)
-        f.grid(row=row, column=0,
-               sticky="e" if user else "w",
-               padx=(80,12) if user else (12,80), pady=5)
-        ctk.CTkLabel(f, text=("Tú  " if user else "🐾 Lince  ") + texto,
-            font=("Arial",13), text_color=TEXT, wraplength=520, justify="left").pack(padx=16, pady=10)
+    def _guardar_mensajes(self, session_id: str, texto_usuario: str, respuesta: str):
+        self.db.executemany(
+            "INSERT INTO conversaciones (session_id, role, content) VALUES (?,?,?)",
+            [(session_id, "user", texto_usuario), (session_id, "assistant", respuesta)],
+        )
+        self.db.commit()
+
+    def _limpiar_sesion_db(self, session_id: str):
+        self.db.execute("DELETE FROM conversaciones WHERE session_id=?", (session_id,))
+        self.db.commit()
+
+    # ── Helpers de UI ─────────────────────────────────────────────────────────
+
+    def _agregar_mensaje(self, texto: str, rol: str):
+        es_usuario = rol == "user"
+        fila = len(self.scroll.winfo_children())
+        burbuja = ctk.CTkFrame(
+            self.scroll,
+            fg_color=COLOR_USUARIO if es_usuario else COLOR_BOT,
+            corner_radius=14,
+        )
+        burbuja.grid(
+            row=fila, column=0,
+            sticky="e" if es_usuario else "w",
+            padx=(80, 12) if es_usuario else (12, 80),
+            pady=5,
+        )
+        prefijo = "Tú  " if es_usuario else "🐾 Lince  "
+        ctk.CTkLabel(
+            burbuja, text=prefijo + texto,
+            font=("Arial", 13), text_color=TEXT,
+            wraplength=520, justify="left",
+        ).pack(padx=16, pady=10)
         self.scroll.after(120, lambda: self.scroll._parent_canvas.yview_moveto(1.0))
 
-    def _st(self, t: str):
-        self.lbl_l.configure(text=t)
-        self.lbl_c.configure(text=t)
+    def _set_estado(self, mensaje: str):
+        self.lbl_estado_inicio.configure(text=mensaje)
+        self.lbl_estado_chat.configure(text=mensaje)
 
-    def _mics_reset(self):
-        self.btn_mic_l.configure(fg_color=BLUE)
-        self.btn_mic_c.configure(fg_color=BLUE)
+    def _restaurar_microfono(self):
+        self.btn_mic_inicio.configure(fg_color=BLUE)
+        self.btn_mic_chat.configure(fg_color=BLUE)
         self.grabando = False
 
-    # ── Queue ────────────────────────────────────────────────
+    # ── Loop de eventos ───────────────────────────────────────────────────────
 
-    def _poll(self):
+    def _procesar_eventos(self):
         try:
             while True:
-                ev, data = self.q.get_nowait()
-                if ev == "env":
-                    self._mics_reset(); self._proc(*data)
-                elif ev == "resp":
-                    self._burbuja(data, "bot"); self._st("🔊  Hablando...")
-                    threading.Thread(target=self._tts_t, args=(data,), daemon=True).start()
-                elif ev == "tts_end":
-                    self._st(""); self.procesando = False
-                elif ev == "st":
-                    self._st(data)
-                elif ev == "rst":
-                    self._st(data); self._mics_reset(); self.procesando = False
-                elif ev == "err":
-                    self._burbuja("Hubo un error. Intenta de nuevo.", "bot")
-                    self._st(""); self.procesando = False
+                evento, datos = self.eventos.get_nowait()
+                if evento == "env":
+                    self._restaurar_microfono()
+                    self._procesar(*datos)
+                elif evento == "resp":
+                    self._agregar_mensaje(datos, "bot")
+                    self._set_estado("🔊  Hablando...")
+                    threading.Thread(target=self._reproducir_voz, args=(datos,), daemon=True).start()
+                elif evento == "tts_end":
+                    self._set_estado("")
+                    self.procesando = False
+                elif evento == "st":
+                    self._set_estado(datos)
+                elif evento == "rst":
+                    self._set_estado(datos)
+                    self._restaurar_microfono()
+                    self.procesando = False
+                elif evento == "err":
+                    self._agregar_mensaje("Hubo un error. Intenta de nuevo.", "bot")
+                    self._set_estado("")
+                    self.procesando = False
         except queue.Empty:
             pass
-        self.after(80, self._poll)
+        self.after(80, self._procesar_eventos)
 
-    # ── Inactividad ──────────────────────────────────────────
+    # ── Vigilancia de inactividad ─────────────────────────────────────────────
 
-    def _inact_watch(self):
-        if time.time() - self._ultimo > INACT_S and self.fc.winfo_ismapped() and not self.procesando:
-            self._reset()
-        self.after(5000, self._inact_watch)
+    def _vigilar_inactividad(self):
+        inactivo = time.time() - self.ultimo_uso > INACTIVIDAD_S
+        en_chat  = self.frame_chat.winfo_ismapped()
+        if inactivo and en_chat and not self.procesando:
+            self._nueva_sesion()
+        self.after(5000, self._vigilar_inactividad)
 
+
+# ── Punto de entrada ──────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    LinceApp().mainloop()
+    import sys
+
+    # El flag --kiosco lo usa KIOSCO.bat para saltar el selector
+    if "--kiosco" in sys.argv:
+        modo = next(m for m in MODOS if m.nombre == "Kiosco")
+    else:
+        selector = SelectorModo()
+        selector.mainloop()
+        modo = selector.modo_elegido
+
+    if modo:
+        try:
+            LinceApp(modo).mainloop()
+        finally:
+            monitoring.cerrar()

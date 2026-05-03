@@ -1,0 +1,6 @@
+Coloca aquí el logo de la UAdeO con el nombre exacto:
+
+  logo_uadeo.png   ← pantalla de inicio (recomendado: fondo transparente, mínimo 300x300 px)
+  logo_uadeo_blanco.png  ← (opcional) versión blanca para el AppBar
+
+Si el archivo no existe, la app muestra el ícono genérico de escuela como respaldo.

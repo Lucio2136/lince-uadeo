@@ -1,7 +1,15 @@
 customtkinter
+flet
 openai
 python-dotenv
 sounddevice
 scipy
 numpy
 pygame
+langchain
+langchain-openai
+langchain-community
+faiss-cpu
+pypdf
+langsmith
+langfuse
